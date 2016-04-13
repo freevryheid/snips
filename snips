@@ -1,0 +1,257 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""command line source file snippets archiver"""
+import os
+import os.path
+import sys
+import tempfile
+import pickle
+import gzip
+import pydoc
+import atexit
+import readline
+import re
+import time
+from subprocess import call
+import pyperclip
+
+EDITOR = os.environ.get("EDITOR", "nano")
+__version__ = "0.5"
+
+
+class Snip:
+
+    def __init__(self):
+        histfile = os.path.join(os.path.expanduser("~"), ".snips_history")
+        try:
+            readline.read_history_file(histfile)
+            h_len = readline.get_history_length()
+        except FileNotFoundError:
+            open(histfile, 'wb').close()
+            h_len = 0
+        atexit.register(self.savehist, h_len, histfile)
+        self.saveme = False
+
+    def savehist(self, prev_h_len, histfile):
+        new_h_len = readline.get_history_length()
+        readline.set_history_length(1000)
+        readline.append_history_file(new_h_len - prev_h_len, histfile)
+
+    def edit(self, initial_message=""):
+        with tempfile.NamedTemporaryFile(suffix="."+self.sfile, mode="w+t") as tf:
+            tf.write(initial_message)
+            tf.flush()
+            call([EDITOR, tf.name])
+            tf.seek(0)
+            edited_message = tf.read()
+        return edited_message
+
+    def loader(self):
+        snips = []
+        try:
+            snips = pickle.load(gzip.open(self.sfile, "rb"))
+        except:
+            snips = []
+        print("snippets file: %s" % self.sfile)
+        return snips
+
+    def saver(self):
+        pickle.dump(self.snips, gzip.open(self.sfile, "wb"))
+
+    def xusage(self):
+        print("usage: %s [file]" % sys.argv[0])
+        print("examples: ")
+        print("  snips py")
+        print("  snips sql")
+        print("file:")
+        print("  filename for snippets archive")
+        print("  used for syntax highlighting in EDITOR,")
+        print("  use 'c' for c, 'for' for fortran, etc,")
+        print("  whatever extension your EDITOR recognizes.")
+
+    def cmdarg(self, argv):
+        if len(argv) != 1:
+            self.xusage()
+            sys.exit(2)
+        if self.validfile(argv[0]):
+            return argv[0]
+        else:
+            print("invalid filename provided")
+            sys.exit(2)
+
+    def validfile(self, filename):
+        if os.path.isfile(filename):
+            return True
+        else:
+            try:
+                open(filename, 'w').close()
+                os.unlink(filename)
+                return True
+            except OSError:
+                return False
+
+    def main(self, argv):
+        print("snips v%s snippets archiver" % __version__)
+        self.sfile = self.cmdarg(argv)
+        self.snips = self.loader()
+        print("enter h for help")
+        helper = (
+            "snips help\n"
+            "   note: n is a number as in c10 or c 10\n"
+            "         that refers to the snippet number\n"
+            "         from the (p)rint command.\n"
+            "   cn > copy to clipboard snippet n\n"
+            "   dn > delete snippet n\n"
+            "   D  > delete all snippets\n"
+            "   en > edit snippet content n\n"
+            "   En > edit snippet name/description n\n"
+            "   f  > find/search text within snippets\n"
+            "   ln > list snippet n\n"
+            "   n  > new snippet\n"
+            "   p  > print snippets\n"
+            "   P  > print snippets with code block\n"
+            "   q  > quit\n"
+            "   s  > save snippets\n"
+            "   S  > save as new snippets file"
+        )
+        while True:
+            time.sleep(0.2)
+            cmd = input("snips > ")
+            cmd = cmd.strip()
+            cmn = None
+            if len(cmd) > 1:
+                try:
+                    cmn = int(cmd[1:])
+                    cmd = cmd[0]
+                except:
+                    print("invalid command %s" % cmd)
+                    continue
+            if cmd == "h":
+                print(helper)
+            elif cmd == "p":
+                if len(self.snips) == 0:
+                    print("no snippets defined as yet")
+                else:
+                    snips = ""
+                    for i, s in enumerate(self.snips):
+                        snips += "%s %s\n" % (str(i), s[0].strip())
+                    pydoc.pager(snips)
+            elif cmd == "P":
+                if len(self.snips) == 0:
+                    print("no snippets defined as yet")
+                else:
+                    snips = ""
+                    for i, s in enumerate(self.snips):
+                        snips += "%s %s\n" % (str(i), s[0].strip())
+                        snips += "%s\n" % s[1].strip()
+                    pydoc.pager(snips)
+            elif cmd == "n":
+                name = input("enter snippet name (edit later using the E cmd): ")
+                input("hit enter to edit the snippet in EDITOR (save when done)")
+                snip = self.edit()
+                self.snips.append([name, snip])
+                self.saveme = True
+            elif cmd == "e":
+                if cmn is None:
+                    print("error: no snippet number provided")
+                    continue
+                try:
+                    name = self.snips[cmn][0]
+                    snip = self.snips[cmn][1]
+                    snip = self.edit(snip)
+                    self.snips[cmn] = [name, snip]
+                    self.saveme = True
+                except:
+                    print("error: no snippet numbered %s" % cmn)
+            elif cmd == "E":
+                if cmn is None:
+                    print("error: no snippet number provided")
+                    continue
+                try:
+                    name = self.snips[cmn][0]
+                    snip = self.snips[cmn][1]
+                    name = self.edit(name)
+                    self.snips[cmn] = [name, snip]
+                    self.saveme = True
+                except:
+                    print("error: no snippet numbered %s" % cmn)
+            elif cmd == "d":
+                if cmn is None:
+                    print("error: no snippet number provided")
+                    continue
+                try:
+                    name = self.snips[cmn][0]
+                    yn = input("delete %s %s (y/n)? " % (str(cmn), name))
+                    if yn.upper() == "Y":
+                        del self.snips[cmn]
+                        self.saveme = True
+                except:
+                    print("error: no snippet numbered %s" % cmn)
+            elif cmd == "D":
+                yn = input("delete all snippets (y/n)? ")
+                if yn.upper() == "Y":
+                    self.snips = []
+                    self.saveme = True
+            elif cmd == "s":
+                self.saver()
+                print("snippets saved to: %s" % self.sfile)
+                self.saveme = False
+            elif cmd == "S":
+                sflag = True
+                sfile = input("enter new snippets filename: ")
+                if self.validfile(sfile):
+                    if os.path.isfile(sfile):
+                        yn = input("overwrite existing file %s (y/n)? " % sfile)
+                        if yn.upper() != "Y":
+                            sflag = False
+                    if sflag:
+                        self.sfile = sfile
+                        self.saver()
+                        print("snippets saved to: %s" % self.sfile)
+                else:
+                    print("invalid filename provided")
+            elif cmd == "l":
+                if cmn is None:
+                    print("error: no snippet number provided")
+                    continue
+                try:
+                    name = self.snips[cmn][0]
+                    snip = self.snips[cmn][1]
+                    print("%s" % name)
+                    pydoc.pager(snip)
+                except:
+                    print("error: no snippet numbered %s" % cmn)
+            elif cmd == "c":
+                if cmn is None:
+                    print("error: no snippet number provided")
+                    continue
+                try:
+                    snip = self.snips[cmn][1]
+                    pyperclip.copy(snip)
+                    print("snippet %s copied to clipboard" % cmn)
+                except:
+                    print("error: no snippet numbered %s" % cmn)
+            elif cmd == "f":
+                res = input("enter re string to search: ")
+                print("snippets with re string (blank is none):")
+                for i, s in enumerate(self.snips):
+                    m = re.search(res, s[1])
+                    if m is not None:
+                        print("%s " % i, end="")
+                        continue
+                print("")
+            elif cmd == "q":
+                if self.saveme:
+                    yn = input("save snippets (y/n)? ")
+                    if yn.upper() == "Y":
+                        self.saver()
+                        print("snippets saved to: %s" % self.sfile)
+                print("bye!")
+                break
+            else:
+                print("invalid command %s" % cmd)
+
+if __name__ == "__main__":
+    snip = Snip()
+    snip.main(sys.argv[1:])
+
